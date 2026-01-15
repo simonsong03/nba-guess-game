@@ -14,7 +14,6 @@ from datetime import datetime, date
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from nba_api.stats.endpoints import commonallplayers, commonplayerinfo, playergamelog, teaminfocommon
-from nba_api.stats.static import teams
 
 def populate_cache():
     """Fetch all players and their full details for 2025-26 season and save to cache"""
@@ -59,16 +58,7 @@ def populate_cache():
         print("This will take a while - please be patient...")
         
         player_details_cache = {}
-        teams_info_cache = {}
-        
-        # Get teams info once
-        print("\n🏀 Fetching teams info...")
-        try:
-            all_teams = teams.get_teams()
-            teams_info_cache = {team['abbreviation']: team for team in all_teams}
-            print(f"✅ Loaded {len(teams_info_cache)} teams")
-        except Exception as e:
-            print(f"⚠️ Error loading teams: {e}")
+        teams_info_cache = {}  # Cache team_id -> (division, conference)
         
         successful = 0
         failed = 0
@@ -127,12 +117,31 @@ def populate_cache():
                 team_abbrev = player_data.get('TEAM_ABBREVIATION', '')
                 team_name = player_data.get('TEAM_NAME', '')
                 
+                # Get division and conference from API
                 division = ''
                 conference = ''
-                if team_abbrev and team_abbrev in teams_info_cache:
-                    team_data = teams_info_cache[team_abbrev]
-                    division = team_data.get('division', '')
-                    conference = team_data.get('conference', '')
+                if team_id:
+                    # Check cache first
+                    if team_id in teams_info_cache:
+                        division, conference = teams_info_cache[team_id]
+                    else:
+                        # Fetch from API
+                        try:
+                            team_info = teaminfocommon.TeamInfoCommon(
+                                team_id=team_id,
+                                timeout=30
+                            )
+                            team_df = team_info.team_info_common.get_data_frame()
+                            if not team_df.empty:
+                                division = team_df.iloc[0].get('TEAM_DIVISION', '')
+                                conference = team_df.iloc[0].get('TEAM_CONFERENCE', '')
+                                # Cache it
+                                teams_info_cache[team_id] = (division, conference)
+                        except Exception as e:
+                            # If it fails, cache empty values to avoid retrying
+                            teams_info_cache[team_id] = ('', '')
+                            if i <= 5:  # Only show first few errors
+                                print(f"    ⚠️ Could not fetch team info for {team_name}: {e}")
                 
                 # Build player details
                 player_id_str = str(player_id)
