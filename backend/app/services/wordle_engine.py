@@ -2,6 +2,7 @@
 Wordle Engine - Game logic for comparing guesses to target player
 """
 from typing import Dict, List, Optional
+import re
 
 
 class WordleEngine:
@@ -64,7 +65,8 @@ class WordleEngine:
                 'height': guessed_player.get('height', ''),
                 'position': guessed_player.get('position', ''),
                 'jersey_number': guessed_player.get('jersey_number'),
-                'ppg': guessed_player.get('ppg', 0.0)
+                'ppg': guessed_player.get('ppg', 0.0),
+                'image_url': guessed_player.get('image_url')
             },
             'comparison': comparison,
             'is_correct': is_correct,
@@ -296,32 +298,56 @@ class WordleEngine:
                 'status': 'correct'
             }
         
-        # Partial match: same position group
-        # Guards: PG, SG, G
-        # Forwards: SF, PF, F
-        # Centers: C
-        guard_positions = {'PG', 'SG', 'G'}
-        forward_positions = {'SF', 'PF', 'F'}
-        center_positions = {'C'}
+        # Helper function to extract position groups from a position string
+        # Handles formats like "C", "PF", "SF", "Center-Forward", "C-F", etc.
+        def get_position_groups(pos_str):
+            """Extract all position groups from a position string"""
+            groups = set()
+            pos_upper = pos_str.upper().strip()
+            
+            # Split by hyphen, slash, or space to handle "Center-Forward", "C-F", "C/F", etc.
+            # Replace hyphens and slashes with spaces, then split
+            normalized = re.sub(r'[-/]', ' ', pos_upper)
+            parts = [p.strip() for p in normalized.split() if p.strip()]
+            
+            # If no parts after splitting, check the original string
+            if not parts:
+                parts = [pos_upper]
+            
+            # Check each part for position indicators
+            # Use separate if statements (not elif) so hyphenated positions can match multiple groups
+            for part in parts:
+                # Center positions
+                if part in ['C', 'CENTER']:
+                    groups.add('center')
+                # Guard positions  
+                if part in ['PG', 'POINT', 'G', 'GUARD'] or part.startswith('SHOOTING'):
+                    groups.add('guard')
+                if part == 'SG':
+                    groups.add('guard')
+                # Forward positions
+                if part in ['PF', 'POWER', 'SF', 'SMALL']:
+                    groups.add('forward')
+                if part in ['F', 'FORWARD']:
+                    groups.add('forward')
+            
+            # Handle standalone abbreviations that might not have been split
+            if not groups:
+                if pos_upper in ['C']:
+                    groups.add('center')
+                elif pos_upper in ['PG', 'SG', 'G']:
+                    groups.add('guard')
+                elif pos_upper in ['SF', 'PF', 'F']:
+                    groups.add('forward')
+            
+            return groups
         
-        target_group = None
-        guessed_group = None
+        # Get position groups for both target and guessed
+        target_groups = get_position_groups(target_pos_upper)
+        guessed_groups = get_position_groups(guessed_pos_upper)
         
-        if any(pos in target_pos_upper for pos in guard_positions):
-            target_group = 'guard'
-        elif any(pos in target_pos_upper for pos in forward_positions):
-            target_group = 'forward'
-        elif 'C' in target_pos_upper:
-            target_group = 'center'
-        
-        if any(pos in guessed_pos_upper for pos in guard_positions):
-            guessed_group = 'guard'
-        elif any(pos in guessed_pos_upper for pos in forward_positions):
-            guessed_group = 'forward'
-        elif 'C' in guessed_pos_upper:
-            guessed_group = 'center'
-        
-        if target_group and guessed_group and target_group == guessed_group:
+        # If they share any position group, it's a partial match
+        if target_groups and guessed_groups and target_groups.intersection(guessed_groups):
             return {
                 'attribute': 'position',
                 'guessed': guessed_pos,
