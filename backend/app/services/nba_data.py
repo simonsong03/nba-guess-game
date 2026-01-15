@@ -49,8 +49,11 @@ class NBADataService:
     def __init__(self):
         self._all_players_cache = {}
         self._teams_cache = None
+        self._player_details_cache = {}  # In-memory cache for player details
         self._setup_retry_session()
         self._cache_file = Path(__file__).parent.parent / "data" / "players_cache.json"
+        self._player_details_cache_file = Path(__file__).parent.parent / "data" / "player_details_cache.json"
+        self._load_player_details_cache()
     
     def _setup_retry_session(self):
         """Setup requests session with retry logic for NBA API calls"""
@@ -105,6 +108,42 @@ class NBADataService:
         except Exception as e:
             print(f"⚠️ Error loading cache: {e}")
             return None
+    
+    def _load_player_details_cache(self):
+        """Load player details cache from JSON file"""
+        try:
+            if self._player_details_cache_file.exists():
+                with open(self._player_details_cache_file, 'r', encoding='utf-8') as f:
+                    cache_data = json.load(f)
+                    self._player_details_cache = cache_data.get('players', {})
+                    print(f"✅ Loaded {len(self._player_details_cache)} player details from cache")
+        except Exception as e:
+            print(f"⚠️ Error loading player details cache: {e}")
+            self._player_details_cache = {}
+    
+    def _save_player_details_cache(self, player_id: int, player_details: Dict):
+        """Save player details to cache"""
+        try:
+            player_id_str = str(player_id)
+            self._player_details_cache[player_id_str] = player_details
+            
+            # Save to file periodically (every 10 players to avoid too many writes)
+            if len(self._player_details_cache) % 10 == 0:
+                self._flush_player_details_cache()
+        except Exception as e:
+            print(f"⚠️ Error saving player details cache: {e}")
+    
+    def _flush_player_details_cache(self):
+        """Write player details cache to disk"""
+        try:
+            cache_data = {
+                'last_updated': datetime.now().isoformat(),
+                'players': self._player_details_cache
+            }
+            with open(self._player_details_cache_file, 'w', encoding='utf-8') as f:
+                json.dump(cache_data, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            print(f"⚠️ Error flushing player details cache: {e}")
     
     def _retry_api_call(self, func, *args, max_retries=3, delay=2, **kwargs):
         """Wrapper to retry API calls with exponential backoff"""
@@ -240,6 +279,15 @@ class NBADataService:
         if season is None:
             season = self._get_current_season()
         
+        # Check if we have cached player details first
+        player_id_str = str(player_id)
+        if player_id_str in self._player_details_cache:
+            cached_details = self._player_details_cache[player_id_str]
+            # Check if cache is for the right season (or if it's general info)
+            if cached_details.get('season') == season or cached_details.get('season') is None:
+                print(f"✅ Using cached player details for {player_id}")
+                return cached_details
+        
         # Try API first, fallback to cached data if it fails
         try:
             # Get player info (this is general info, not season-specific)
@@ -335,7 +383,7 @@ class NBADataService:
             # NBA.com uses format: https://cdn.nba.com/headshots/nba/latest/1040x760/{player_id}.png
             image_url = f"https://cdn.nba.com/headshots/nba/latest/1040x760/{player_id_str}.png"
             
-            return {
+            player_details = {
                 'id': int(player_data.get('PERSON_ID', player_id)),
                 'name': player_data.get('DISPLAY_FIRST_LAST', 'Unknown'),
                 'team': team_name or team_abbrev or 'Free Agent',
@@ -347,8 +395,14 @@ class NBADataService:
                 'position': player_data.get('POSITION', ''),
                 'jersey_number': int(player_data.get('JERSEY', 0)) if player_data.get('JERSEY') else None,
                 'ppg': round(float(ppg), 1) if ppg else 0.0,
-                'image_url': image_url
+                'image_url': image_url,
+                'season': season  # Store season for cache validation
             }
+            
+            # Save to cache for future use
+            self._save_player_details_cache(player_id, player_details)
+            
+            return player_details
         except Exception as e:
             error_msg = str(e)
             print(f"⚠️ API failed for player {player_id}: {error_msg}")
@@ -364,9 +418,15 @@ class NBADataService:
                         break
                 
                 if player_from_cache:
-                    print(f"✅ Using cached data for player {player_id} (fallback mode - limited data)")
-                    # Build player details from cache
+                    # Check if we have full details cached
                     player_id_str = str(player_id)
+                    if player_id_str in self._player_details_cache:
+                        cached_details = self._player_details_cache[player_id_str]
+                        print(f"✅ Using full cached player details for {player_id}")
+                        return cached_details
+                    
+                    # Otherwise, use minimal data from players list cache
+                    print(f"✅ Using minimal cached data for player {player_id} (fallback mode)")
                     image_url = f"https://cdn.nba.com/headshots/nba/latest/1040x760/{player_id_str}.png"
                     
                     # Get team name from cache if available
@@ -389,7 +449,7 @@ class NBADataService:
                     
                     # Note: In fallback mode, detailed stats (age, height, position, jersey, ppg) are not available
                     # This is expected when NBA API is unavailable - game still works with basic info
-                    return {
+                    minimal_details = {
                         'id': player_id,
                         'name': player_from_cache.get('DISPLAY_FIRST_LAST', 'Unknown'),
                         'team': team_display,
@@ -401,8 +461,10 @@ class NBADataService:
                         'position': '',  # Not available in cache - API required
                         'jersey_number': None,  # Not available in cache - API required
                         'ppg': 0.0,  # Default to 0 when using cache - API required
-                        'image_url': image_url
+                        'image_url': image_url,
+                        'season': season
                     }
+                    return minimal_details
                 else:
                     print(f"❌ Player {player_id} not found in cache either")
                     raise ValueError(f"Player {player_id} not found in API or cache")
@@ -450,3 +512,11 @@ class NBADataService:
             except:
                 self._teams_cache = {}
         return self._teams_cache
+    
+    def __del__(self):
+        """Save cache on service destruction"""
+        try:
+            if hasattr(self, '_player_details_cache') and self._player_details_cache:
+                self._flush_player_details_cache()
+        except:
+            pass
