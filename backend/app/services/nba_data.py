@@ -114,19 +114,22 @@ class NBADataService:
                 # Add delay between retries (except first attempt)
                 if attempt > 0:
                     wait_time = delay * (2 ** (attempt - 1))  # Exponential backoff
-                    print(f"Retrying after {wait_time} seconds...")
-                    time.sleep(wait_time)
+                    if wait_time > 0:
+                        print(f"Retrying after {wait_time} seconds...")
+                        time.sleep(wait_time)
                 
                 return func(*args, **kwargs)
             except (requests.exceptions.Timeout, requests.exceptions.ConnectionError, 
                     requests.exceptions.ReadTimeout, Exception) as e:
                 last_exception = e
                 error_msg = str(e)
-                print(f"API call attempt {attempt + 1}/{max_retries} failed: {error_msg}")
+                if max_retries > 1:
+                    print(f"API call attempt {attempt + 1}/{max_retries} failed: {error_msg}")
                 
                 # If it's the last attempt, raise the exception
                 if attempt == max_retries - 1:
-                    print(f"All {max_retries} attempts failed. Raising exception.")
+                    if max_retries > 1:
+                        print(f"All {max_retries} attempts failed. Raising exception.")
                     raise
                 
                 # Continue to next retry
@@ -149,7 +152,7 @@ class NBADataService:
                         all_players = commonallplayers.CommonAllPlayers(
                             is_only_current_season=1,
                             league_id='00',
-                            timeout=10,  # Shorter timeout - we'll fallback quickly
+                            timeout=5,  # Very short timeout - fail fast to cache
                             headers=self.default_headers
                         )
                     else:
@@ -158,13 +161,13 @@ class NBADataService:
                             is_only_current_season=0,
                             league_id='00',
                             season=season,
-                            timeout=10,  # Shorter timeout - we'll fallback quickly
+                            timeout=5,  # Very short timeout - fail fast to cache
                             headers=self.default_headers
                         )
                     return all_players.get_data_frames()[0]
                 
-                # Try API with shorter timeout and fewer retries
-                players_data = self._retry_api_call(fetch_players, max_retries=2, delay=1)
+                # Try API with very short timeout - fail fast to cache
+                players_data = self._retry_api_call(fetch_players, max_retries=1, delay=1)
                 
                 # Filter by season if needed (for historical seasons)
                 if season != self._get_current_season():
@@ -229,8 +232,7 @@ class NBADataService:
             raise ValueError(f"No players found for season {season}")
         
         player = random.choice(active_players)
-        # Small delay to avoid rate limiting
-        time.sleep(0.5)
+        # No delay - we'll fail fast to cache if needed
         return self.get_player_details(player['PERSON_ID'], season)
     
     def get_player_details(self, player_id: int, season: Optional[str] = None) -> Dict:
@@ -244,21 +246,20 @@ class NBADataService:
             def fetch_player_info():
                 player_info = commonplayerinfo.CommonPlayerInfo(
                     player_id=player_id,
-                    timeout=10,  # Shorter timeout - fail fast and use cached players
+                    timeout=5,  # Very short timeout - fail fast
                     headers=self.default_headers
                 )
                 return player_info.get_data_frames()[0]
             
-            # Retry with exponential backoff (fewer retries for faster fallback)
-            info_df = self._retry_api_call(fetch_player_info, max_retries=2, delay=1)
+            # Retry with exponential backoff (single retry for faster fallback)
+            info_df = self._retry_api_call(fetch_player_info, max_retries=1, delay=0.5)
             
             if info_df.empty:
                 raise ValueError(f"Player {player_id} not found")
             
             player_data = info_df.iloc[0].to_dict()
             
-            # Small delay between API calls to avoid rate limiting
-            time.sleep(0.3)
+            # Skip delay - we're already fast-failing
             
             # Calculate age from birthdate
             age = None
@@ -283,16 +284,13 @@ class NBADataService:
                     game_log = playergamelog.PlayerGameLog(
                         player_id=player_id,
                         season=season,
-                        timeout=10,  # Shorter timeout
+                        timeout=5,  # Very short timeout - fail fast
                         headers=self.default_headers
                     )
                     return game_log.get_data_frames()[0]
                 
-                # Retry with exponential backoff (fewer retries)
-                stats_df = self._retry_api_call(fetch_player_stats, max_retries=2, delay=1)
-                
-                # Small delay after stats call
-                time.sleep(0.3)
+                # Single retry with no delay
+                stats_df = self._retry_api_call(fetch_player_stats, max_retries=1, delay=0.5)
                 
                 if not stats_df.empty:
                     # Calculate PPG from the specified season
@@ -317,13 +315,13 @@ class NBADataService:
                     def fetch_team_info():
                         team_info = teaminfocommon.TeamInfoCommon(
                             team_id=team_id,
-                            timeout=10,  # Shorter timeout
+                            timeout=5,  # Very short timeout
                             headers=self.default_headers
                         )
                         return team_info.team_info_common.get_data_frame()
                     
-                    # Retry with exponential backoff (fewer retries for team info as it's less critical)
-                    team_df = self._retry_api_call(fetch_team_info, max_retries=1, delay=1)
+                    # Skip retry for team info - it's not critical
+                    team_df = self._retry_api_call(fetch_team_info, max_retries=0, delay=0)
                     
                     if not team_df.empty:
                         division = team_df.iloc[0].get('TEAM_DIVISION', '')
@@ -366,23 +364,43 @@ class NBADataService:
                         break
                 
                 if player_from_cache:
-                    print(f"✅ Using cached data for player {player_id}")
-                    # Build minimal player details from cache
+                    print(f"✅ Using cached data for player {player_id} (fallback mode - limited data)")
+                    # Build player details from cache
                     player_id_str = str(player_id)
                     image_url = f"https://cdn.nba.com/headshots/nba/latest/1040x760/{player_id_str}.png"
                     
+                    # Get team name from cache if available
+                    team_name = player_from_cache.get('TEAM_NAME', '')
+                    team_abbrev = player_from_cache.get('TEAM_ABBREVIATION', '')
+                    team_display = team_name or team_abbrev or 'Unknown'
+                    
+                    # Try to get division/conference from static teams data
+                    division = ''
+                    conference = ''
+                    if team_abbrev:
+                        try:
+                            teams_info = self.get_teams_info()
+                            if team_abbrev in teams_info:
+                                team_data = teams_info[team_abbrev]
+                                division = team_data.get('division', '')
+                                conference = team_data.get('conference', '')
+                        except:
+                            pass
+                    
+                    # Note: In fallback mode, detailed stats (age, height, position, jersey, ppg) are not available
+                    # This is expected when NBA API is unavailable - game still works with basic info
                     return {
                         'id': player_id,
                         'name': player_from_cache.get('DISPLAY_FIRST_LAST', 'Unknown'),
-                        'team': player_from_cache.get('TEAM_ABBREVIATION', '') or 'Unknown',
-                        'team_abbreviation': player_from_cache.get('TEAM_ABBREVIATION', ''),
-                        'division': '',  # Not available in cache
-                        'conference': '',  # Not available in cache
-                        'age': None,  # Not available in cache
-                        'height': '',  # Not available in cache
-                        'position': '',  # Not available in cache
-                        'jersey_number': None,  # Not available in cache
-                        'ppg': 0.0,  # Default to 0 when using cache
+                        'team': team_display,
+                        'team_abbreviation': team_abbrev,
+                        'division': division,  # From static teams data if available
+                        'conference': conference,  # From static teams data if available
+                        'age': None,  # Not available in cache - API required
+                        'height': '',  # Not available in cache - API required
+                        'position': '',  # Not available in cache - API required
+                        'jersey_number': None,  # Not available in cache - API required
+                        'ppg': 0.0,  # Default to 0 when using cache - API required
                         'image_url': image_url
                     }
                 else:
