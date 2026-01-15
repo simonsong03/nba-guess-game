@@ -28,7 +28,7 @@ def populate_cache():
     
     try:
         # Step 1: Fetch players list
-        print("\n📋 Step 1: Fetching players list...")
+        print("\nStep 1: Fetching players list...")
         all_players = commonallplayers.CommonAllPlayers(
             is_only_current_season=1,
             league_id='00',
