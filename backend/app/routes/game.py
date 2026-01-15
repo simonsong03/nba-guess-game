@@ -54,56 +54,28 @@ class GuessResponse(BaseModel):
 @router.post("/start-game", response_model=StartGameResponse)
 async def start_game():
     """Start a new game with a random NBA player from the 2025-26 season"""
-    max_retries = 3
-    last_error = None
-    
-    for attempt in range(max_retries):
-        try:
-            # Hardcode to 2025-26 season
-            season = "2025-26"
-            
-            target_player = nba_service.get_random_player(season)
-            game_engine = WordleEngine(target_player, season)
-            
-            # Generate simple game ID (in production, use UUID)
-            import uuid
-            game_id = str(uuid.uuid4())
-            
-            games[game_id] = game_engine
-            
-            return StartGameResponse(
-                game_id=game_id,
-                message="Game started! Guess the NBA player."
-            )
-        except ValueError as e:
-            error_msg = str(e)
-            # If it's a timeout or connection error, retry
-            if "timeout" in error_msg.lower() or "connection" in error_msg.lower() or "timed out" in error_msg.lower():
-                last_error = e
-                if attempt < max_retries - 1:
-                    import time
-                    wait_time = 2 * (attempt + 1)  # 2, 4, 6 seconds
-                    print(f"Retrying game start (attempt {attempt + 1}/{max_retries}) after {wait_time}s...")
-                    time.sleep(wait_time)
-                    continue
-            # For other ValueError, raise immediately
-            raise HTTPException(status_code=400, detail=f"Failed to start game: {error_msg}")
-        except Exception as e:
-            error_msg = str(e)
-            last_error = e
-            if attempt < max_retries - 1:
-                import time
-                wait_time = 2 * (attempt + 1)
-                print(f"Retrying game start (attempt {attempt + 1}/{max_retries}) after {wait_time}s...")
-                time.sleep(wait_time)
-                continue
-    
-    # All retries failed
-    error_detail = str(last_error) if last_error else "Unknown error"
-    raise HTTPException(
-        status_code=503, 
-        detail=f"NBA API is currently unavailable. Please try again in a moment. Error: {error_detail}"
-    )
+    try:
+        # Hardcode to 2025-26 season
+        season = "2025-26"
+        
+        # Service will automatically fall back to cache if API fails
+        target_player = nba_service.get_random_player(season)
+        game_engine = WordleEngine(target_player, season)
+        
+        # Generate simple game ID (in production, use UUID)
+        import uuid
+        game_id = str(uuid.uuid4())
+        
+        games[game_id] = game_engine
+        
+        return StartGameResponse(
+            game_id=game_id,
+            message="Game started! Guess the NBA player."
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=f"Failed to start game: {str(e)}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to start game: {str(e)}")
 
 
 @router.get("/player-search", response_model=List[PlayerSearchResult])
@@ -134,54 +106,26 @@ async def make_guess(request: GuessRequest):
     if game_engine.is_game_over():
         raise HTTPException(status_code=400, detail="Game is already over")
     
-    max_retries = 2
-    last_error = None
-    
-    for attempt in range(max_retries):
-        try:
-            # Get player details for the game's season
-            guessed_player = nba_service.get_player_details(request.player_id, game_engine.season)
-            
-            # Make guess
-            result = game_engine.make_guess(guessed_player)
-            
-            return GuessResponse(
-                guessed_player=result['guessed_player'],
-                comparison=result['comparison'],
-                is_correct=result['is_correct'],
-                guess_number=result['guess_number'],
-                is_game_over=game_engine.is_game_over(),
-                is_won=result['is_correct']
-            )
-        except ValueError as e:
-            error_msg = str(e)
-            # If it's a timeout or connection error, retry
-            if "timeout" in error_msg.lower() or "connection" in error_msg.lower() or "timed out" in error_msg.lower():
-                last_error = e
-                if attempt < max_retries - 1:
-                    import time
-                    wait_time = 2 * (attempt + 1)
-                    print(f"Retrying guess (attempt {attempt + 1}/{max_retries}) after {wait_time}s...")
-                    time.sleep(wait_time)
-                    continue
-            # For other ValueError (like duplicate guess, max guesses), raise immediately
-            raise HTTPException(status_code=400, detail=error_msg)
-        except Exception as e:
-            error_msg = str(e)
-            last_error = e
-            if attempt < max_retries - 1:
-                import time
-                wait_time = 2 * (attempt + 1)
-                print(f"Retrying guess (attempt {attempt + 1}/{max_retries}) after {wait_time}s...")
-                time.sleep(wait_time)
-                continue
-    
-    # All retries failed
-    error_detail = str(last_error) if last_error else "Unknown error"
-    raise HTTPException(
-        status_code=503,
-        detail=f"NBA API is currently unavailable. Please try again. Error: {error_detail}"
-    )
+    try:
+        # Get player details for the game's season
+        # Service will handle timeouts and fallbacks automatically
+        guessed_player = nba_service.get_player_details(request.player_id, game_engine.season)
+        
+        # Make guess
+        result = game_engine.make_guess(guessed_player)
+        
+        return GuessResponse(
+            guessed_player=result['guessed_player'],
+            comparison=result['comparison'],
+            is_correct=result['is_correct'],
+            guess_number=result['guess_number'],
+            is_game_over=game_engine.is_game_over(),
+            is_won=result['is_correct']
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Guess failed: {str(e)}")
 
 
 @router.get("/game-state/{game_id}")

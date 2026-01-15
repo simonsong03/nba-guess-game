@@ -6,6 +6,9 @@ from nba_api.stats.endpoints import commonplayerinfo, playergamelog, commonallpl
 from nba_api.stats.static import players, teams
 import random
 import time
+import json
+import os
+from pathlib import Path
 from datetime import datetime, date
 import requests
 from requests.adapters import HTTPAdapter
@@ -47,6 +50,7 @@ class NBADataService:
         self._all_players_cache = {}
         self._teams_cache = None
         self._setup_retry_session()
+        self._cache_file = Path(__file__).parent.parent / "data" / "players_cache.json"
     
     def _setup_retry_session(self):
         """Setup requests session with retry logic for NBA API calls"""
@@ -82,6 +86,25 @@ class NBADataService:
             'Referer': 'https://www.nba.com/',
             'Origin': 'https://www.nba.com'
         }
+    
+    def _load_cached_players(self, season: str) -> Optional[List[Dict]]:
+        """Load players from cached JSON file"""
+        try:
+            if not self._cache_file.exists():
+                return None
+            
+            with open(self._cache_file, 'r', encoding='utf-8') as f:
+                cache_data = json.load(f)
+            
+            # Check if cache is for the right season
+            if cache_data.get('season') == season:
+                print(f"✅ Loaded {len(cache_data.get('players', []))} players from cache")
+                return cache_data.get('players', [])
+            
+            return None
+        except Exception as e:
+            print(f"⚠️ Error loading cache: {e}")
+            return None
     
     def _retry_api_call(self, func, *args, max_retries=3, delay=2, **kwargs):
         """Wrapper to retry API calls with exponential backoff"""
@@ -126,7 +149,7 @@ class NBADataService:
                         all_players = commonallplayers.CommonAllPlayers(
                             is_only_current_season=1,
                             league_id='00',
-                            timeout=90,  # 90 second timeout for player list
+                            timeout=10,  # Shorter timeout - we'll fallback quickly
                             headers=self.default_headers
                         )
                     else:
@@ -135,13 +158,13 @@ class NBADataService:
                             is_only_current_season=0,
                             league_id='00',
                             season=season,
-                            timeout=90,  # 90 second timeout for player list
+                            timeout=10,  # Shorter timeout - we'll fallback quickly
                             headers=self.default_headers
                         )
                     return all_players.get_data_frames()[0]
                 
-                # Retry with exponential backoff
-                players_data = self._retry_api_call(fetch_players, max_retries=4, delay=3)
+                # Try API with shorter timeout and fewer retries
+                players_data = self._retry_api_call(fetch_players, max_retries=2, delay=1)
                 
                 # Filter by season if needed (for historical seasons)
                 if season != self._get_current_season():
@@ -151,23 +174,34 @@ class NBADataService:
                     pass
                 
                 self._all_players_cache[cache_key] = players_data.to_dict('records')
+                print(f"✅ Fetched {len(self._all_players_cache[cache_key])} players from NBA API")
             except Exception as e:
-                # Fallback to static players list
-                print(f"Error fetching players for season {season}: {e}")
-                try:
-                    all_players = players.get_players()
-                    self._all_players_cache[cache_key] = [
-                        {
-                            'PERSON_ID': p['id'],
-                            'DISPLAY_FIRST_LAST': p['full_name'],
-                            'TEAM_ID': None,
-                            'TEAM_ABBREVIATION': None
-                        }
-                        for p in all_players
-                    ]
-                except Exception as fallback_error:
-                    print(f"Fallback also failed: {fallback_error}")
-                    raise ValueError(f"Failed to fetch players for season {season} after retries")
+                # Fallback to cached JSON file
+                print(f"⚠️ NBA API failed for season {season}: {e}")
+                print("🔄 Attempting to load from cache...")
+                
+                cached_players = self._load_cached_players(season)
+                if cached_players:
+                    self._all_players_cache[cache_key] = cached_players
+                    print(f"✅ Using cached players (fallback mode)")
+                else:
+                    # Last resort: static players list
+                    print("⚠️ Cache not available, using static players list...")
+                    try:
+                        all_players = players.get_players()
+                        self._all_players_cache[cache_key] = [
+                            {
+                                'PERSON_ID': p['id'],
+                                'DISPLAY_FIRST_LAST': p['full_name'],
+                                'TEAM_ID': None,
+                                'TEAM_ABBREVIATION': None
+                            }
+                            for p in all_players
+                        ]
+                        print(f"✅ Using static players list ({len(self._all_players_cache[cache_key])} players)")
+                    except Exception as fallback_error:
+                        print(f"❌ All fallbacks failed: {fallback_error}")
+                        raise ValueError(f"Failed to fetch players for season {season} - API, cache, and static list all failed")
         
         return self._all_players_cache[cache_key]
     
@@ -209,13 +243,13 @@ class NBADataService:
             def fetch_player_info():
                 player_info = commonplayerinfo.CommonPlayerInfo(
                     player_id=player_id,
-                    timeout=90,  # 90 second timeout
+                    timeout=10,  # Shorter timeout - fail fast and use cached players
                     headers=self.default_headers
                 )
                 return player_info.get_data_frames()[0]
             
-            # Retry with exponential backoff
-            info_df = self._retry_api_call(fetch_player_info, max_retries=4, delay=3)
+            # Retry with exponential backoff (fewer retries for faster fallback)
+            info_df = self._retry_api_call(fetch_player_info, max_retries=2, delay=1)
             
             if info_df.empty:
                 raise ValueError(f"Player {player_id} not found")
@@ -248,13 +282,13 @@ class NBADataService:
                     game_log = playergamelog.PlayerGameLog(
                         player_id=player_id,
                         season=season,
-                        timeout=90,  # 90 second timeout
+                        timeout=10,  # Shorter timeout
                         headers=self.default_headers
                     )
                     return game_log.get_data_frames()[0]
                 
-                # Retry with exponential backoff
-                stats_df = self._retry_api_call(fetch_player_stats, max_retries=4, delay=3)
+                # Retry with exponential backoff (fewer retries)
+                stats_df = self._retry_api_call(fetch_player_stats, max_retries=2, delay=1)
                 
                 # Small delay after stats call
                 time.sleep(0.3)
@@ -282,13 +316,13 @@ class NBADataService:
                     def fetch_team_info():
                         team_info = teaminfocommon.TeamInfoCommon(
                             team_id=team_id,
-                            timeout=60,  # 60 second timeout
+                            timeout=10,  # Shorter timeout
                             headers=self.default_headers
                         )
                         return team_info.team_info_common.get_data_frame()
                     
                     # Retry with exponential backoff (fewer retries for team info as it's less critical)
-                    team_df = self._retry_api_call(fetch_team_info, max_retries=2, delay=2)
+                    team_df = self._retry_api_call(fetch_team_info, max_retries=1, delay=1)
                     
                     if not team_df.empty:
                         division = team_df.iloc[0].get('TEAM_DIVISION', '')
