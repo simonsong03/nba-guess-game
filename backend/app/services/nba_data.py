@@ -279,15 +279,16 @@ class NBADataService:
         if season is None:
             season = self._get_current_season()
         
-        # Check if we have cached player details first
+        # Check if we have cached player details first - use cache if available
         player_id_str = str(player_id)
         if player_id_str in self._player_details_cache:
             cached_details = self._player_details_cache[player_id_str]
             # Check if cache is for the right season (or if it's general info)
             if cached_details.get('season') == season or cached_details.get('season') is None:
-                print(f"✅ Using cached player details for {player_id}")
+                # Use cache immediately - no API call needed
                 return cached_details
         
+        # Only try API if we don't have cached data
         # Try API first, fallback to cached data if it fails
         try:
             # Get player info (this is general info, not season-specific)
