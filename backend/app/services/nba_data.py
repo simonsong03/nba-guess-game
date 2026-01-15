@@ -238,6 +238,7 @@ class NBADataService:
         if season is None:
             season = self._get_current_season()
         
+        # Try API first, fallback to cached data if it fails
         try:
             # Get player info (this is general info, not season-specific)
             def fetch_player_info():
@@ -352,14 +353,50 @@ class NBADataService:
             }
         except Exception as e:
             error_msg = str(e)
-            print(f"Error fetching player details for {player_id}: {error_msg}")
-            # Provide more helpful error message
-            if "timeout" in error_msg.lower() or "timed out" in error_msg.lower():
-                raise ValueError(f"NBA API request timed out for player {player_id}. Please try again.")
-            elif "connection" in error_msg.lower():
-                raise ValueError(f"Failed to connect to NBA API for player {player_id}. Please try again.")
-            else:
-                raise ValueError(f"Failed to fetch player details for {player_id}: {error_msg}")
+            print(f"⚠️ API failed for player {player_id}: {error_msg}")
+            print(f"🔄 Attempting to use cached player data...")
+            
+            # Fallback: try to get player from cached players list
+            try:
+                cached_players = self.get_all_active_players(season)
+                player_from_cache = None
+                for p in cached_players:
+                    if p.get('PERSON_ID') == player_id:
+                        player_from_cache = p
+                        break
+                
+                if player_from_cache:
+                    print(f"✅ Using cached data for player {player_id}")
+                    # Build minimal player details from cache
+                    player_id_str = str(player_id)
+                    image_url = f"https://cdn.nba.com/headshots/nba/latest/1040x760/{player_id_str}.png"
+                    
+                    return {
+                        'id': player_id,
+                        'name': player_from_cache.get('DISPLAY_FIRST_LAST', 'Unknown'),
+                        'team': player_from_cache.get('TEAM_ABBREVIATION', '') or 'Unknown',
+                        'team_abbreviation': player_from_cache.get('TEAM_ABBREVIATION', ''),
+                        'division': '',  # Not available in cache
+                        'conference': '',  # Not available in cache
+                        'age': None,  # Not available in cache
+                        'height': '',  # Not available in cache
+                        'position': '',  # Not available in cache
+                        'jersey_number': None,  # Not available in cache
+                        'ppg': 0.0,  # Default to 0 when using cache
+                        'image_url': image_url
+                    }
+                else:
+                    print(f"❌ Player {player_id} not found in cache either")
+                    raise ValueError(f"Player {player_id} not found in API or cache")
+            except Exception as cache_error:
+                print(f"❌ Cache fallback also failed: {cache_error}")
+                # Provide helpful error message
+                if "timeout" in error_msg.lower() or "timed out" in error_msg.lower():
+                    raise ValueError(f"NBA API timed out and player not in cache. Please try again.")
+                elif "connection" in error_msg.lower():
+                    raise ValueError(f"Failed to connect to NBA API and player not in cache. Please try again.")
+                else:
+                    raise ValueError(f"Failed to fetch player details for {player_id}: {error_msg}")
     
     def search_players(self, query: str, limit: int = 20, season: Optional[str] = None) -> List[Dict]:
         """Search for players by name for a given season"""
