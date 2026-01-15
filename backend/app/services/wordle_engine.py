@@ -34,6 +34,12 @@ class WordleEngine:
         if len(self.guesses) >= self.max_guesses:
             raise ValueError("Maximum guesses reached")
         
+        # Check if this player has already been guessed
+        guessed_player_id = guessed_player.get('id')
+        for previous_guess in self.guesses:
+            if previous_guess['guessed_player']['id'] == guessed_player_id:
+                raise ValueError(f"You have already guessed {guessed_player.get('name', 'this player')}")
+        
         comparison = {
             'team': self._compare_team(guessed_player),
             'division': self._compare_division(guessed_player),
