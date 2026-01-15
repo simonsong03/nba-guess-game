@@ -4,6 +4,37 @@ import './App.css'
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
 
+// Icon components
+const CheckIcon = ({ className }) => (
+  <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+  </svg>
+)
+
+const XIcon = ({ className }) => (
+  <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+  </svg>
+)
+
+const ArrowUpIcon = ({ className }) => (
+  <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7" />
+  </svg>
+)
+
+const ArrowDownIcon = ({ className }) => (
+  <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+  </svg>
+)
+
+const WaveIcon = ({ className }) => (
+  <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 12c2.5-2.5 5-2.5 7.5 0s5 2.5 7.5 0M5 12c2.5 2.5 5 2.5 7.5 0s5-2.5 7.5 0" />
+  </svg>
+)
+
 function App() {
   const [gameId, setGameId] = useState(null)
   const [guesses, setGuesses] = useState([])
@@ -91,42 +122,29 @@ function App() {
     }
   }
 
-  const getMatchIcon = (comparison) => {
+  const getStatusIcon = (comparison) => {
     // Handle both old format (string) and new format (object)
+    let status = 'incorrect'
     if (typeof comparison === 'string') {
-      // Legacy format support
-      switch (comparison) {
-        case 'exact':
-        case 'correct':
-          return '✅'
-        case 'partial':
-          return '🟨'
-        case 'none':
-        case 'incorrect':
-          return '❌'
-        default:
-          return '❌'
-      }
+      status = comparison === 'exact' || comparison === 'correct' ? 'correct' : 
+               comparison === 'partial' ? 'partial' : 'incorrect'
+    } else if (comparison && comparison.status) {
+      status = comparison.status
     }
     
-    // New format: object with status field
-    if (comparison && comparison.status) {
-      switch (comparison.status) {
-        case 'correct':
-          return '✅'
-        case 'partial':
-          return '🟨'
-        case 'higher':
-          return '⬆️'
-        case 'lower':
-          return '⬇️'
-        case 'incorrect':
-        default:
-          return '❌'
-      }
+    switch (status) {
+      case 'correct':
+        return <CheckIcon className="status-icon status-icon-correct" />
+      case 'partial':
+        return <WaveIcon className="status-icon status-icon-partial" />
+      case 'higher':
+        return <ArrowUpIcon className="status-icon status-icon-higher" />
+      case 'lower':
+        return <ArrowDownIcon className="status-icon status-icon-lower" />
+      case 'incorrect':
+      default:
+        return <XIcon className="status-icon status-icon-incorrect" />
     }
-    
-    return '❌'
   }
   
   const getComparisonValue = (comparison, guessedValue) => {
@@ -229,37 +247,54 @@ function App() {
           <p className="no-guesses">No guesses yet. Start guessing!</p>
         )}
         {guesses.map((guess, index) => (
-          <div key={index} className="guess-card">
-            <div className="guess-header">
-              <div className="player-header-info">
-                {guess.guessed_player.image_url && (
-                  <img 
-                    src={guess.guessed_player.image_url} 
-                    alt={guess.guessed_player.name}
-                    className="player-image"
-                    onError={(e) => {
-                      // Hide image if it fails to load
-                      e.target.style.display = 'none'
-                    }}
-                  />
-                )}
-                <h3>{guess.guessed_player.name}</h3>
+          <div key={index} className="guess-row">
+            <div className="guess-player-section">
+              <div className="player-image-wrapper">
+                <img 
+                  src={guess.guessed_player?.image_url || ''} 
+                  alt={guess.guessed_player?.name || 'Player'}
+                  className="player-headshot"
+                  onError={(e) => {
+                    e.target.style.display = 'none'
+                    const placeholder = e.target.parentElement.querySelector('.player-image-placeholder')
+                    if (placeholder) {
+                      placeholder.classList.remove('hidden')
+                    }
+                  }}
+                  onLoad={(e) => {
+                    const placeholder = e.target.parentElement.querySelector('.player-image-placeholder')
+                    if (placeholder) {
+                      placeholder.classList.add('hidden')
+                    }
+                  }}
+                  style={{ display: guess.guessed_player?.image_url ? 'block' : 'none' }}
+                />
+                <div className={`player-image-placeholder ${guess.guessed_player?.image_url ? 'hidden' : ''}`}>
+                  <span className="placeholder-text">?</span>
+                </div>
               </div>
-              <span className="guess-number">Guess #{guess.guess_number}</span>
+              <div className="player-info">
+                <h3 className="player-name-large">{guess.guessed_player.name}</h3>
+                <span className="guess-number-badge">Guess #{guess.guess_number}</span>
+              </div>
             </div>
-            <div className="guess-comparison">
+            <div className="guess-attributes-grid">
               {attributes.map((attr) => {
                 const comparison = guess.comparison[attr.key]
-                const guessedValue = guess.guessed_player[attr.key]
+                const guessedValue = getComparisonValue(comparison, guess.guessed_player[attr.key])
+                const status = typeof comparison === 'object' && comparison?.status 
+                  ? comparison.status 
+                  : typeof comparison === 'string' 
+                    ? (comparison === 'exact' || comparison === 'correct' ? 'correct' : comparison === 'partial' ? 'partial' : 'incorrect')
+                    : 'incorrect'
+                
                 return (
-                  <div key={attr.key} className="comparison-item">
-                    <span className="attr-label">{attr.label}:</span>
-                    <span className="attr-value">
-                      {getComparisonValue(comparison, guessedValue)}
-                    </span>
-                    <span className="match-icon" title={comparison?.status || ''}>
-                      {getMatchIcon(comparison)}
-                    </span>
+                  <div key={attr.key} className={`attribute-tile attribute-tile-${status}`}>
+                    <div className="attribute-label">{attr.label}</div>
+                    <div className="attribute-value">{guessedValue}</div>
+                    <div className="attribute-icon">
+                      {getStatusIcon(comparison)}
+                    </div>
                   </div>
                 )
               })}
