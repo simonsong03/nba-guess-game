@@ -4,10 +4,21 @@ import './App.css'
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
 
+// NBA Logo Component - Using official NBA logo from NBA CDN
+const NBALogo = ({ className }) => {
+  return (
+    <img 
+      src="https://cdn.nba.com/logos/nba/nba-logoman-word-white.svg" 
+      alt="NBA Logo" 
+      className={className}
+    />
+  )
+}
+
 // Icon components
 const CheckIcon = ({ className }) => (
   <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
   </svg>
 )
 
@@ -40,11 +51,13 @@ function App() {
   const [guesses, setGuesses] = useState([])
   const [isGameOver, setIsGameOver] = useState(false)
   const [isWon, setIsWon] = useState(false)
+  const [targetPlayer, setTargetPlayer] = useState(null)
   const [searchQuery, setSearchQuery] = useState('')
   const [searchResults, setSearchResults] = useState([])
   const [selectedPlayer, setSelectedPlayer] = useState(null)
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState(null)
+  const [showOverlay, setShowOverlay] = useState(false)
 
   useEffect(() => {
     startNewGame()
@@ -54,11 +67,13 @@ function App() {
     try {
       setIsLoading(true)
       setError(null)
+      setShowOverlay(false)
       const response = await axios.post(`${API_BASE_URL}/api/start-game`)
       setGameId(response.data.game_id)
       setGuesses([])
       setIsGameOver(false)
       setIsWon(false)
+      setTargetPlayer(null)
       setSelectedPlayer(null)
       setSearchQuery('')
       setSearchResults([])
@@ -112,6 +127,16 @@ function App() {
       setGuesses([...guesses, newGuess])
       setIsGameOver(newGuess.is_game_over)
       setIsWon(newGuess.is_won)
+      
+      // If game is over, show overlay with target player
+      if (newGuess.is_game_over && newGuess.target_player) {
+        setTargetPlayer(newGuess.target_player)
+        // Small delay to allow guess animation to complete
+        setTimeout(() => {
+          setShowOverlay(true)
+        }, 500)
+      }
+      
       setSelectedPlayer(null)
       setSearchQuery('')
     } catch (err) {
@@ -174,24 +199,75 @@ function App() {
 
   return (
     <div className="app">
+      {/* Win/Loss Overlay */}
+      {showOverlay && targetPlayer && (
+        <div className={`game-overlay ${isWon ? 'won' : 'lost'}`}>
+          <div className="overlay-content">
+            <div className="overlay-header">
+              <h2 className="overlay-title">
+                {isWon ? '🎉 YOU GOT IT!' : 'GAME OVER'}
+              </h2>
+              <p className="overlay-subtitle">
+                {isWon ? 'Congratulations!' : 'Better luck next time!'}
+              </p>
+            </div>
+            
+            <div className="target-player-card">
+              <div className="target-player-image-wrapper">
+                <img 
+                  src={targetPlayer.image_url || ''} 
+                  alt={targetPlayer.name || 'Player'}
+                  className="target-player-image"
+                  onError={(e) => {
+                    e.target.style.display = 'none'
+                    const placeholder = e.target.parentElement.querySelector('.target-player-placeholder')
+                    if (placeholder) placeholder.classList.remove('hidden')
+                  }}
+                />
+                <div className={`target-player-placeholder ${targetPlayer.image_url ? 'hidden' : ''}`}>
+                  <span>?</span>
+                </div>
+              </div>
+              <h3 className="target-player-name">{targetPlayer.name}</h3>
+              <p className="target-player-team">{targetPlayer.team}</p>
+              
+              <div className="target-player-stats">
+                {attributes.map((attr) => {
+                  const value = targetPlayer[attr.key]
+                  return (
+                    <div key={attr.key} className="target-stat-badge">
+                      <span className="target-stat-label">{attr.label}</span>
+                      <span className="target-stat-value">{value || 'N/A'}</span>
+                      <CheckIcon className="target-stat-check" />
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+            
+            <button onClick={startNewGame} className="play-again-btn">
+              Play Again
+            </button>
+          </div>
+        </div>
+      )}
+
       <header className="header">
-        <h1>🏀 NBA Wordle</h1>
-        <p>Guess the NBA player in 8 tries!</p>
-        <p className="season-display">Season: 2025-26</p>
+        <div className="header-banner">
+          <div className="header-logo-wrapper">
+            <NBALogo className="nba-logo" />
+          </div>
+          <div className="header-title-section">
+            <h1 className="header-title">NBA WORDLE</h1>
+            <p className="header-subtitle">Guess the NBA player in 8 tries!</p>
+            <p className="season-display">Season: 2025-26</p>
+          </div>
+        </div>
       </header>
 
       {error && (
         <div className="error-message">
           {error}
-        </div>
-      )}
-
-      {isGameOver && (
-        <div className={`game-over ${isWon ? 'won' : 'lost'}`}>
-          <h2>{isWon ? '🎉 Congratulations! You guessed it!' : '😔 Game Over!'}</h2>
-          <button onClick={startNewGame} className="new-game-btn">
-            New Game
-          </button>
         </div>
       )}
 
@@ -247,7 +323,7 @@ function App() {
           <p className="no-guesses">No guesses yet. Start guessing!</p>
         )}
         {guesses.map((guess, index) => (
-          <div key={index} className="guess-row">
+          <div key={index} className={`guess-row guess-row-${index + 1}`}>
             <div className="guess-player-section">
               <div className="player-image-wrapper">
                 <img 
@@ -289,12 +365,14 @@ function App() {
                     : 'incorrect'
                 
                 return (
-                  <div key={attr.key} className={`attribute-tile attribute-tile-${status}`}>
-                    <div className="attribute-label">{attr.label}</div>
-                    <div className="attribute-value">{guessedValue}</div>
-                    <div className="attribute-icon">
-                      {getStatusIcon(comparison)}
+                  <div key={attr.key} className={`stat-badge stat-badge-${status}`}>
+                    <div className="stat-badge-header">
+                      <span className="stat-badge-label">{attr.label}</span>
+                      <div className="stat-badge-icon">
+                        {getStatusIcon(comparison)}
+                      </div>
                     </div>
+                    <div className="stat-badge-value">{guessedValue}</div>
                   </div>
                 )
               })}

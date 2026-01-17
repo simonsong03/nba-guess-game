@@ -49,6 +49,7 @@ class GuessResponse(BaseModel):
     guess_number: int
     is_game_over: bool
     is_won: bool
+    target_player: Optional[Dict] = None
 
 
 @router.post("/start-game", response_model=StartGameResponse)
@@ -114,14 +115,28 @@ async def make_guess(request: GuessRequest):
         # Make guess
         result = game_engine.make_guess(guessed_player)
         
-        return GuessResponse(
-            guessed_player=result['guessed_player'],
-            comparison=result['comparison'],
-            is_correct=result['is_correct'],
-            guess_number=result['guess_number'],
-            is_game_over=game_engine.is_game_over(),
-            is_won=result['is_correct']
-        )
+        # If game is over, get target player details for the overlay
+        target_player_details = None
+        if game_engine.is_game_over():
+            target_player_details = nba_service.get_player_details(
+                game_engine.target_player.get('id'), 
+                game_engine.season
+            )
+        
+        response_data = {
+            'guessed_player': result['guessed_player'],
+            'comparison': result['comparison'],
+            'is_correct': result['is_correct'],
+            'guess_number': result['guess_number'],
+            'is_game_over': game_engine.is_game_over(),
+            'is_won': result['is_correct']
+        }
+        
+        # Add target player details if game is over
+        if target_player_details:
+            response_data['target_player'] = target_player_details
+        
+        return GuessResponse(**response_data)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
